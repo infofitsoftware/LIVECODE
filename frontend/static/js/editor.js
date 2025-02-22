@@ -169,9 +169,22 @@ async function selectClass(classId) {
         const response = await fetch(`/api/notes/${classId}`);
         const data = await response.json();
         
-        // Set editor content
-        quill.setContents(JSON.parse(data.content || '{"ops":[]}'));
-        
+        if (data.content) {
+            try {
+                // Try to parse as new format
+                const content = JSON.parse(data.content);
+                if (content.delta) {
+                    quill.setContents(content.delta);
+                } else if (content.text) {
+                    quill.setText(content.text);
+                }
+            } catch (e) {
+                // Fallback for old format or plain text
+                quill.setText(data.content);
+            }
+        } else {
+            quill.setText('');
+        }
     } catch (error) {
         console.error('Failed to fetch notes:', error);
         showToast('Failed to load notes', 'error');
@@ -182,14 +195,23 @@ async function selectClass(classId) {
 async function updateNotes() {
     if (!currentClassId) return;
     
-    const content = JSON.stringify(quill.getContents());
     try {
+        // Get the content as plain text for backwards compatibility
+        const plainText = quill.getText();
+        // Get the delta for rich text
+        const delta = quill.getContents();
+        
+        const content = {
+            text: plainText,
+            delta: delta
+        };
+
         const response = await fetch(`/api/notes/${currentClassId}`, {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
             },
-            body: JSON.stringify({ content })
+            body: JSON.stringify({ content: JSON.stringify(content) })
         });
         
         if (response.ok) {

@@ -1,8 +1,10 @@
 let classroomId = window.location.pathname.split('/').pop();
 let pollInterval = null;
+let quill = null;
 
 document.addEventListener('DOMContentLoaded', () => {
     initializeTheme();
+    initializeQuill();
     loadNotes();
     setupEventListeners();
 });
@@ -11,6 +13,13 @@ function initializeTheme() {
     const savedTheme = localStorage.getItem('theme') || 'light';
     document.documentElement.setAttribute('data-theme', savedTheme);
     document.getElementById('theme-toggle').checked = savedTheme === 'dark';
+}
+
+function initializeQuill() {
+    quill = new Quill('#viewer', {
+        theme: 'bubble',
+        readOnly: true
+    });
 }
 
 function setupEventListeners() {
@@ -43,8 +52,22 @@ async function loadNotes() {
             `Class ${classId.split('-')[1]}`;
         
         // Update content
-        document.getElementById('notes-content').textContent = 
-            data.content || 'No notes available';
+        if (data.content) {
+            try {
+                // Try to parse as new format
+                const content = JSON.parse(data.content);
+                if (content.delta) {
+                    quill.setContents(content.delta);
+                } else if (content.text) {
+                    quill.setText(content.text);
+                }
+            } catch (e) {
+                // Fallback for old format or plain text
+                quill.setText(data.content);
+            }
+        } else {
+            quill.setText('No notes available');
+        }
         
         // Update last modified time
         if (data.last_updated) {
