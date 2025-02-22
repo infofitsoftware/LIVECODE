@@ -1,20 +1,73 @@
 let currentClassId = null;
 let saveTimeout = null;
 let classesMap = new Map();
+let quill = null;
 
 // Initialize editor page
 document.addEventListener('DOMContentLoaded', () => {
+    initializeTheme();
+    initializeQuill();
     initializeEventListeners();
     loadClassList();
 });
+
+function initializeTheme() {
+    const savedTheme = localStorage.getItem('theme') || 'light';
+    document.documentElement.setAttribute('data-theme', savedTheme);
+    document.getElementById('theme-toggle').checked = savedTheme === 'dark';
+}
+
+function initializeQuill() {
+    const toolbarOptions = [
+        ['bold', 'italic', 'underline', 'strike'],
+        ['blockquote', 'code-block'],
+        [{ 'header': 1 }, { 'header': 2 }],
+        [{ 'list': 'ordered'}, { 'list': 'bullet' }],
+        [{ 'script': 'sub'}, { 'script': 'super' }],
+        [{ 'indent': '-1'}, { 'indent': '+1' }],
+        [{ 'direction': 'rtl' }],
+        [{ 'size': ['small', false, 'large', 'huge'] }],
+        [{ 'header': [1, 2, 3, 4, 5, 6, false] }],
+        [{ 'color': [] }, { 'background': [] }],
+        [{ 'font': [] }],
+        [{ 'align': [] }],
+        ['clean']
+    ];
+
+    quill = new Quill('#editor', {
+        theme: 'snow',
+        modules: {
+            toolbar: toolbarOptions
+        },
+        placeholder: 'Select a class to start taking notes...'
+    });
+
+    quill.disable();
+
+    quill.on('text-change', () => {
+        if (saveTimeout) clearTimeout(saveTimeout);
+        document.getElementById('save-status').textContent = 'Saving...';
+        
+        saveTimeout = setTimeout(() => {
+            if (currentClassId) {
+                updateNotes();
+            }
+        }, 1000);
+    });
+}
 
 function initializeEventListeners() {
     document.getElementById('create-class-btn').addEventListener('click', createNewClass);
     document.getElementById('logout-btn').addEventListener('click', handleLogout);
     document.getElementById('share-btn').addEventListener('click', showShareModal);
-    document.getElementById('copy-btn').addEventListener('click', copyShareUrl);
     document.getElementById('modal-copy-btn').addEventListener('click', copyModalShareUrl);
-    initializeEditor();
+    
+    // Theme toggle
+    document.getElementById('theme-toggle').addEventListener('change', (e) => {
+        const theme = e.target.checked ? 'dark' : 'light';
+        document.documentElement.setAttribute('data-theme', theme);
+        localStorage.setItem('theme', theme);
+    });
 }
 
 // Load existing classes
@@ -24,33 +77,45 @@ async function loadClassList() {
         const classes = await response.json();
         
         const classListElement = document.getElementById('class-list');
-        classListElement.innerHTML = ''; // Clear existing list
+        classListElement.innerHTML = '';
         
+        if (classes.length === 0) {
+            classListElement.innerHTML = `
+                <div class="p-3 text-center text-muted">
+                    No classes yet. Create your first class!
+                </div>
+            `;
+            return;
+        }
+
         classes.forEach(classItem => {
             classesMap.set(classItem.classroom_id, classItem);
             addClassToList(classItem);
         });
     } catch (error) {
         console.error('Failed to load classes:', error);
+        showToast('Error loading classes', 'error');
     }
 }
 
 // Add class to the list
 function addClassToList(classItem) {
     const classListElement = document.getElementById('class-list');
-    const listItem = document.createElement('li');
-    listItem.className = 'list-group-item d-flex justify-content-between align-items-center';
+    const div = document.createElement('div');
+    div.className = 'class-list-item';
+    div.setAttribute('data-class-id', classItem.classroom_id);
     
-    // Format the date for display
     const lastUpdated = new Date(classItem.last_updated).toLocaleString();
     
-    listItem.innerHTML = `
-        <div class="class-info" onclick="selectClass('${classItem.classroom_id}')">
-            <div class="class-name">Class ${classItem.classroom_id.split('-')[1]}</div>
+    div.innerHTML = `
+        <div class="d-flex flex-column">
+            <div class="fw-bold">Class ${classItem.classroom_id.split('-')[1]}</div>
             <small class="text-muted">Last updated: ${lastUpdated}</small>
         </div>
     `;
-    classListElement.appendChild(listItem);
+
+    div.addEventListener('click', () => selectClass(classItem.classroom_id));
+    classListElement.appendChild(div);
 }
 
 // Create new class
@@ -63,7 +128,6 @@ async function createNewClass() {
     };
     
     try {
-        // Save the new class to the database first
         const response = await fetch(`/api/notes/${classId}`, {
             method: 'POST',
             headers: {
@@ -76,49 +140,49 @@ async function createNewClass() {
             classesMap.set(classId, newClass);
             addClassToList(newClass);
             selectClass(classId);
+            showToast('New class created successfully', 'success');
         }
     } catch (error) {
         console.error('Failed to create new class:', error);
+        showToast('Failed to create new class', 'error');
     }
 }
 
 // Select class
 async function selectClass(classId) {
     currentClassId = classId;
-    document.getElementById('current-class-title').textContent = `Class: ${classId}`;
-    document.getElementById('note-editor').disabled = false;
-    document.querySelector('.share-section').style.display = 'block';
+    
+    // Update UI
+    document.getElementById('current-class-title').textContent = `Class ${classId.split('-')[1]}`;
+    document.getElementById('share-btn').disabled = false;
+    quill.enable();
+    
+    // Update active class in sidebar
+    document.querySelectorAll('.class-list-item').forEach(item => {
+        item.classList.remove('active');
+        if (item.getAttribute('data-class-id') === classId) {
+            item.classList.add('active');
+        }
+    });
     
     try {
         const response = await fetch(`/api/notes/${classId}`);
         const data = await response.json();
-        document.getElementById('note-editor').value = data.content || '';
+        
+        // Set editor content
+        quill.setContents(JSON.parse(data.content || '{"ops":[]}'));
+        
     } catch (error) {
         console.error('Failed to fetch notes:', error);
+        showToast('Failed to load notes', 'error');
     }
-}
-
-// Initialize editor
-function initializeEditor() {
-    const editor = document.getElementById('note-editor');
-    
-    editor.addEventListener('input', () => {
-        if (saveTimeout) clearTimeout(saveTimeout);
-        document.getElementById('save-status').textContent = 'Typing...';
-        
-        saveTimeout = setTimeout(async () => {
-            if (currentClassId) {
-                await updateNotes();
-            }
-        }, 1000);
-    });
 }
 
 // Update notes
 async function updateNotes() {
     if (!currentClassId) return;
     
-    const content = document.getElementById('note-editor').value;
+    const content = JSON.stringify(quill.getContents());
     try {
         const response = await fetch(`/api/notes/${currentClassId}`, {
             method: 'POST',
@@ -129,26 +193,27 @@ async function updateNotes() {
         });
         
         if (response.ok) {
-            document.getElementById('save-status').textContent = 'Saved!';
+            document.getElementById('save-status').textContent = 'All changes saved';
+            setTimeout(() => {
+                document.getElementById('save-status').textContent = '';
+            }, 2000);
+            
             // Update last modified time in the list
             const classItem = classesMap.get(currentClassId);
             if (classItem) {
                 classItem.last_updated = new Date().toISOString();
-                await loadClassList(); // Reload the entire list to get fresh data
+                await loadClassList();
             }
         }
     } catch (error) {
         console.error('Failed to save:', error);
-        document.getElementById('save-status').textContent = 'Failed to save!';
+        showToast('Failed to save changes', 'error');
     }
 }
 
 // Show share modal
 function showShareModal() {
-    if (!currentClassId) {
-        alert('Please select a class first!');
-        return;
-    }
+    if (!currentClassId) return;
     
     const shareUrl = `${window.location.origin}/view/${currentClassId}`;
     document.getElementById('modal-share-url').value = shareUrl;
@@ -164,29 +229,23 @@ function showShareModal() {
     modal.show();
 }
 
-// Copy share URL
-function copyShareUrl() {
-    const shareUrl = document.getElementById('share-url');
-    copyToClipboard(shareUrl);
-}
-
 // Copy modal share URL
 function copyModalShareUrl() {
     const modalShareUrl = document.getElementById('modal-share-url');
-    copyToClipboard(modalShareUrl);
-}
-
-// Copy to clipboard helper
-function copyToClipboard(element) {
-    element.select();
+    modalShareUrl.select();
     document.execCommand('copy');
     
-    const button = element.nextElementSibling;
+    const button = document.getElementById('modal-copy-btn');
     const originalText = button.innerHTML;
     button.innerHTML = '<i class="bi bi-check"></i> Copied!';
     setTimeout(() => {
         button.innerHTML = originalText;
     }, 2000);
+}
+
+function showToast(message, type = 'info') {
+    // You can implement a toast notification system here
+    console.log(`${type}: ${message}`);
 }
 
 // Handle logout
